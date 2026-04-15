@@ -314,6 +314,11 @@ def _ddb_create(logical_id, props, stack_name):
     lsis = props.get("LocalSecondaryIndexes", [])
 
     stream_spec = props.get("StreamSpecification", {})
+    # CloudFormation templates typically supply only StreamViewType without an
+    # explicit StreamEnabled flag. Infer stream as enabled whenever StreamViewType
+    # is present and StreamEnabled has not been explicitly set to False.
+    if stream_spec.get("StreamViewType") and "StreamEnabled" not in stream_spec:
+        stream_spec = {**stream_spec, "StreamEnabled": True}
     stream_enabled = stream_spec.get("StreamEnabled", False)
     stream_arn = f"{arn}/stream/{now_iso()}" if stream_enabled else None
 
