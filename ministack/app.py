@@ -47,6 +47,7 @@ from ministack.services import (
     autoscaling,
     apigateway_v1,
     appconfig,
+    pipes,
     appsync,
     athena,
     cloudformation,
@@ -846,6 +847,7 @@ def _reset_all_state():
         (rds_data, rds_data.reset),
         (s3files, s3files.reset),
         (appconfig, appconfig.reset),
+        (pipes, pipes.reset),
     ]:
         try:
             fn()

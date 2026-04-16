@@ -34,6 +34,7 @@ import ministack.services.ec2 as _ec2
 import ministack.services.ecs as _ecs
 import ministack.services.alb as _alb
 import ministack.services.kinesis as _kinesis
+import ministack.services.pipes as _pipes
 import ministack.services.stepfunctions as _sfn
 import ministack.services.route53 as _r53
 import ministack.services.apigateway as _apigw_v2
@@ -944,6 +945,34 @@ def _lambda_esm_create(logical_id, props, stack_name):
 
 def _lambda_esm_delete(physical_id, props):
     _lambda_svc._esms.pop(physical_id, None)
+
+
+# --- EventBridge Pipes (minimal: DynamoDB Streams -> SNS) ---
+
+def _pipes_pipe_create(logical_id, props, stack_name):
+    name = props.get("Name") or _physical_name(stack_name, logical_id, max_len=64)
+    source = props.get("Source", "")
+    target = props.get("Target", "")
+    role_arn = props.get("RoleArn", "")
+    desired_state = props.get("DesiredState", "RUNNING")
+
+    source_params = props.get("SourceParameters", {})
+    ddb_params = source_params.get("DynamoDBStreamParameters", {}) if isinstance(source_params, dict) else {}
+    starting_position = ddb_params.get("StartingPosition", "LATEST")
+
+    pipe = _pipes.register_pipe(
+        name=name,
+        source=source,
+        target=target,
+        role_arn=role_arn,
+        desired_state=desired_state,
+        starting_position=starting_position,
+    )
+    return name, {"Arn": pipe["Arn"], "Name": name}
+
+
+def _pipes_pipe_delete(physical_id, props):
+    _pipes.delete_pipe(physical_id)
 
 
 # --- Lambda Alias ---
@@ -2618,6 +2647,7 @@ _RESOURCE_HANDLERS = {
     "AWS::ApiGateway::Deployment": {"create": _apigw_deployment_create, "delete": _apigw_deployment_delete},
     "AWS::ApiGateway::Stage": {"create": _apigw_stage_create, "delete": _apigw_stage_delete},
     "AWS::Lambda::EventSourceMapping": {"create": _lambda_esm_create, "delete": _lambda_esm_delete},
+    "AWS::Pipes::Pipe": {"create": _pipes_pipe_create, "delete": _pipes_pipe_delete},
     "AWS::Lambda::Alias": {"create": _lambda_alias_create, "delete": _lambda_alias_delete},
     "AWS::SQS::QueuePolicy": {"create": _sqs_queue_policy_create, "delete": _sqs_queue_policy_delete},
     "AWS::SNS::TopicPolicy": {"create": _sns_topic_policy_create, "delete": _sns_topic_policy_delete},
