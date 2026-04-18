@@ -37,6 +37,9 @@ _SERIAL_TESTS = {
     "tests/test_sfn.py::test_sfn_mock_config_throw",
     "tests/test_ec2.py::test_ec2_create_default_vpc",
     "tests/test_sfn.py::test_sfn_wait_scale_zero_skips_wait",
+    "tests/test_sfn.py::test_sfn_wait_scale_zero_does_not_timeout_lambda_tasks",
+    "tests/test_eks.py::test_eks_create_describe_delete_cluster",
+    "tests/test_eks.py::test_eks_cfn_cluster",
 }
 
 

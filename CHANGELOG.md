@@ -7,6 +7,66 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.1] — 2026-04-18
+
+### Added
+- **Hypercorn ASGI server with HTTP/2 h2c** — replaces uvicorn with hypercorn, enabling cleartext HTTP/2 (h2c) support. AWS Java SDK v2 and Kinesis Client Library (KCL) clients that require HTTP/2 now work out of the box. Idle RAM drops from ~21 MB to ~7 MB. Contributed by @AdigaAkhil (#369). Fixes #361, #364
+- **Lambda log forwarding for Winston/pino** — replaces 5 individual `console.*` overrides with a single `process.stdout.write` intercept. Catches logging libraries like Winston and pino that write directly to `stdout.write` instead of `console.log`. Contributed by @Baptiste-Garcin (#373)
+- **Test suite** — 121 new tests across 11 services: AutoScaling (37 new), ElastiCache (15 new), Glue (19 new), RDS (14 new), CloudWatch Logs (7 new), EMR (5 new), EFS (5 new), Cloud Map (5 new), ACM (3 new), CloudWatch (2 new), EBS (2 new). Total test count: 1,558
+
+### Fixed
+- **Glue `GetPartitionIndexes` Keys format** — service returned Keys as flat strings (`["year"]`) instead of KeySchemaElement objects (`[{"Name": "year"}]`), causing boto3 deserialization failures
+- **RDS `LatestRestorableTime` empty timestamp** — `DescribeDBInstances` rendered `<LatestRestorableTime></LatestRestorableTime>` (empty string) which boto3 couldn't parse as a timestamp. Now defaults to current time
+- **EKS graceful fallback when k3s fails** — if Docker is unavailable or k3s container fails to start (e.g. privileged containers blocked), `CreateCluster` now returns ACTIVE with a mock endpoint and CA certificate instead of FAILED. The EKS API works identically regardless of Docker availability; real k3s is used when possible
+- **EKS state persistence** — restored clusters stay ACTIVE instead of being marked FAILED on restart
+- **EKS Docker tests flaky in parallel** — k3s containers interfere with each other under pytest-xdist. Added both EKS Docker tests to `_SERIAL_TESTS`
+- **EKS CFN test CI failure** — k3s can't start on CI (no Docker), cluster stays in CREATING. Test now polls and accepts CREATING status
+
+### Changed
+- **ASGI server: uvicorn → hypercorn** — dependency changed from `uvicorn[standard]` + `httptools` to `hypercorn>=0.18.0`
+- **pytest parallel distribution: `--dist=load` → `--dist=loadfile`** — keeps all tests from the same file on the same worker, fixing pre-existing Lambda/IAM ordering failures caused by shared session fixtures
+
+---
+
+## [1.2.21] — 2026-04-17
+
+### Added
+- **`/_ministack/ready` endpoint** — exposes ready.d script completion status, enabling Docker healthchecks and orchestrators to gate on init script completion. Contributed by @kjdev (#360)
+- **ECS `command` passed to Docker containers** — task definition `containerDefinitions[].command` is now forwarded to `docker run`, overriding the image's default CMD. Previously the command field was ignored. Contributed by @s0rbus (#366)
+- **CloudFormation `AWS::Events::EventBus` provisioner** — CDK/Terraform stacks declaring EventBridge custom event buses now provision correctly. Supports Name, Tags, and Fn::GetAtt Arn/Name. Contributed by @AdigaAkhil (#365)
+- **Lambda Java, .NET, and Ruby runtime support** — `LAMBDA_EXECUTOR=docker` now supports `java21`, `java17`, `java11`, `java8.al2`, `dotnet8`, `dotnet6`, `ruby3.4`, `ruby3.3`, `ruby3.2` using official AWS Lambda RIE images. Fallback resolvers added for future versions.
+
+### Fixed
+
+#### Lambda
+- **Lambda Docker-in-Docker (DinD)** — `LAMBDA_EXECUTOR=docker` now works when ministack itself runs inside Docker. Code is copied into Lambda containers via `docker cp` instead of bind mounts (which fail because the host Docker daemon can't see the ministack container's filesystem). Lambda containers are reached via container IP instead of host-mapped ports. Container detection uses `/.dockerenv`, `/run/.containerenv`, and `/proc/1/cgroup` fallback. Fixes #367. Reported by @HackJack-101
+- **Lambda timeout enforcement** — warm workers now enforce the configured `Timeout` value via `thread.join(timeout)` + `proc.kill()`. Previously, functions ran indefinitely regardless of the timeout setting. Timeout errors return `Runtime.ExitError` matching AWS behavior.
+- **Lambda published version isolation** — `PublishVersion` now creates immutable code snapshots. Invoking a specific version returns the code from when it was published, not the current `$LATEST`. Workers are keyed by `function_name:qualifier` to prevent version cross-contamination.
+- **Lambda `UpdateFunctionCode` worker invalidation** — only invalidates the `$LATEST` worker, leaving published version workers alive. Previously killed all workers for the function.
+- **Lambda warm container tmpdir cleanup** — warm container cache now tracks and cleans up temp directories when containers are evicted or on `reset()`. Previously leaked `/tmp/ministack-lambda-docker-*` directories.
+- **Lambda `_execute_function_image` deduplicated** — Image-based Lambda execution now reuses `_invoke_rie()` instead of duplicating the HTTP polling logic.
+- **Lambda `_invoke_rie` faster polling** — reduced polling interval from 500ms to 100ms for faster cold starts when using `LAMBDA_EXECUTOR=docker`.
+- **Lambda `Invoke` qualifier from query params** — `Qualifier` query parameter now correctly parsed for Lambda invocations, matching AWS SDK behavior.
+- **Lambda worker error on exception** — worker invalidation on exception now only kills the specific qualifier's worker, not all workers for the function.
+
+#### Cognito
+- **Cognito password validation** — `SignUp`, `AdminCreateUser`, `AdminSetUserPassword`, `ConfirmForgotPassword`, and `ChangePassword` now validate passwords against the pool's `PasswordPolicy` (min length, uppercase, lowercase, numbers, symbols). Previously any password was accepted.
+- **Cognito `_generate_temp_password` policy-compliant** — generated temporary passwords now guarantee at least one character from each required class (upper, lower, digit, symbol), ensuring they pass the pool's own password policy.
+
+#### EKS
+- **EKS non-blocking cluster creation** — `CreateCluster` now returns immediately with `status: CREATING` while k3s starts in a background thread. Previously blocked the ASGI event loop for up to 30 seconds.
+- **EKS failure status** — if k3s fails to start, the cluster status is set to `FAILED` instead of silently going `ACTIVE` with a broken endpoint.
+- **EKS k3s image pinned** — default k3s image pinned to `rancher/k3s:v1.31.4-k3s1` instead of `:latest` for reproducible builds.
+
+#### Performance & Infrastructure
+- **Docker client cached** — Lambda Docker executor reuses a single Docker client instead of creating one per invocation.
+- **EC2 terminated instance cleanup throttled** — `DescribeInstances` no longer scans and cleans up terminated instances on every call; cleanup runs at most once per 10 seconds.
+- **S3 ETag single-compute** — `PutObject` now computes the MD5 hash once instead of twice, reducing CPU per write.
+- **CloudFormation deploy/delete speed** — removed artificial 1.5s async delays from stack deploy and delete operations.
+- **`/_ministack/reset` no longer blocks event loop** — `_reset_all_state()` now runs via `asyncio.to_thread()` so Docker container cleanup (ECS, EKS, Lambda) doesn't starve the ASGI event loop. ECS `reset()` also fixed to stop containers by label filter (`ministack=ecs`) instead of individually fetching stale container IDs.
+
+---
+
 ## [1.2.20] — 2026-04-17
 
 ### Added

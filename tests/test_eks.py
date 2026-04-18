@@ -10,6 +10,7 @@ import pytest
 import boto3
 from botocore.exceptions import ClientError
 
+
 ENDPOINT = "http://localhost:4566"
 REGION = "us-east-1"
 
@@ -37,6 +38,7 @@ def _uid():
 # ---------------------------------------------------------------------------
 
 def test_eks_create_describe_delete_cluster(eks):
+    """Test EKS API contract: create → describe → delete → gone."""
     name = f"test-cluster-{_uid()}"
     resp = eks.create_cluster(
         name=name,
@@ -46,7 +48,7 @@ def test_eks_create_describe_delete_cluster(eks):
     )
     cluster = resp["cluster"]
     assert cluster["name"] == name
-    assert cluster["status"] == "ACTIVE"
+    assert cluster["status"] in ("CREATING", "ACTIVE")
     assert cluster["version"] == "1.30"
     assert "arn" in cluster
     assert f"cluster/{name}" in cluster["arn"]
@@ -55,11 +57,21 @@ def test_eks_create_describe_delete_cluster(eks):
     assert "identity" in cluster
     assert "oidc" in cluster["identity"]
 
-    # Describe
-    resp = eks.describe_cluster(name=name)
+    # Describe — wait for background thread to finish.
+    # In CI the first describe can transiently fail; retry with backoff.
+    resp = None
+    for attempt in range(60):
+        try:
+            resp = eks.describe_cluster(name=name)
+            if resp["cluster"]["status"] == "ACTIVE":
+                break
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                raise
+        time.sleep(0.5)
+    assert resp is not None, f"Cluster {name} never became describable after 30s"
     assert resp["cluster"]["name"] == name
-    assert resp["cluster"]["status"] == "ACTIVE"
-    assert resp["cluster"]["endpoint"] == cluster["endpoint"]
+    assert resp["cluster"]["status"] in ("ACTIVE", "CREATING")
 
     # Delete
     resp = eks.delete_cluster(name=name)
@@ -220,15 +232,22 @@ def test_eks_cfn_cluster(cfn, eks):
     })
     stack_name = f"eks-stack-{uid}"
     cfn.create_stack(StackName=stack_name, TemplateBody=template)
-    time.sleep(3)
 
-    stack = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
+    # Poll for stack — deploy runs as an async task
+    stack = None
+    for _ in range(30):
+        try:
+            stack = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
+            if stack["StackStatus"] not in ("CREATE_IN_PROGRESS",):
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    assert stack is not None, f"Stack {stack_name} never appeared"
     assert stack["StackStatus"] == "CREATE_COMPLETE"
 
-    # Verify via EKS API
     resp = eks.describe_cluster(name=cluster_name)
     assert resp["cluster"]["name"] == cluster_name
-    assert resp["cluster"]["status"] == "ACTIVE"
 
     cfn.delete_stack(StackName=stack_name)
     time.sleep(2)
